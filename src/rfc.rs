@@ -1,9 +1,11 @@
-use crate::Algorithm;
-use crate::TotpError;
-use crate::Totp;
+use crate::{Algorithm, Totp, TotpError};
+use alloc::vec::Vec;
 
 #[cfg(feature = "serde_support")]
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "otpauth")]
+use alloc::string::{String, ToString};
 
 // Check that the number of digits is RFC-compliant.
 // (between 6 and 8 inclusive).
@@ -180,7 +182,7 @@ impl TryFrom<Rfc6238> for Totp {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Rfc6238, TotpError, Totp};
+    use crate::{Rfc6238, Totp, TotpError};
 
     const GOOD_SECRET: &str = "01234567890123456789";
     #[cfg(feature = "otpauth")]

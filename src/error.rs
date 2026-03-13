@@ -1,5 +1,5 @@
 #[cfg(feature = "otpauth")]
-use url::ParseError;
+use {alloc::string::String, url::ParseError};
 
 #[derive(Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -53,8 +53,8 @@ pub enum TotpError {
     IssuerMismatch { path: String, query: String },
 }
 
-impl std::fmt::Display for TotpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for TotpError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             TotpError::SecretTooShort { bits } => write!(
                 f,
@@ -117,8 +117,8 @@ impl std::fmt::Display for TotpError {
     }
 }
 
-impl std::error::Error for TotpError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for TotpError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             #[cfg(feature = "otpauth")]
             TotpError::UrlParse(e) => Some(e),

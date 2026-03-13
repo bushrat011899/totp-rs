@@ -49,6 +49,13 @@
 
 // enable `doc_cfg` feature for `docs.rs`.
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// Only allow implicit `use std::prelude::*;` during testing.
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+#[cfg(feature = "std")]
+extern crate std;
 
 mod custom_providers;
 mod error;
@@ -65,14 +72,18 @@ pub use error::TotpError;
 pub use rfc::Rfc6238;
 pub use secret::{Secret, SecretParseError};
 
+use alloc::{format, string::String, vec::Vec};
 use constant_time_eq::constant_time_eq;
+use core::fmt;
+use hmac::Mac;
 
 #[cfg(feature = "serde_support")]
 use serde::{Deserialize, Serialize};
 
-use core::fmt;
+#[cfg(feature = "otpauth")]
+use alloc::string::ToString;
 
-use hmac::Mac;
+#[cfg(feature = "std")]
 use std::time::{SystemTime, SystemTimeError, UNIX_EPOCH};
 
 type HmacSha1 = hmac::Hmac<sha1::Sha1>;
@@ -140,6 +151,7 @@ impl Algorithm {
     }
 }
 
+#[cfg(feature = "std")]
 fn system_time() -> Result<u64, SystemTimeError> {
     let t = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     Ok(t)
@@ -457,18 +469,21 @@ impl Totp {
 
     /// Returns the timestamp of the first second of the next step
     /// According to system time
+    #[cfg(feature = "std")]
     pub fn next_step_current(&self) -> Result<u64, SystemTimeError> {
         let t = system_time()?;
         Ok(self.next_step(t))
     }
 
     /// Give the ttl (in seconds) of the current token
+    #[cfg(feature = "std")]
     pub fn ttl(&self) -> Result<u64, SystemTimeError> {
         let t = system_time()?;
         Ok(self.step - (t % self.step))
     }
 
     /// Generate a token from the current system time
+    #[cfg(feature = "std")]
     pub fn generate_current(&self) -> Result<String, SystemTimeError> {
         let t = system_time()?;
         Ok(self.generate(t))
@@ -488,6 +503,7 @@ impl Totp {
     }
 
     /// Will check if token is valid by current system time, accounting [skew](struct.Totp.html#structfield.skew)
+    #[cfg(feature = "std")]
     pub fn check_current(&self, token: &str) -> Result<bool, SystemTimeError> {
         let t = system_time()?;
         Ok(self.check(token, t))

@@ -1,5 +1,11 @@
-use crate::{Algorithm, TotpError, Totp};
-
+use crate::{Algorithm, Totp, TotpError};
+use alloc::{
+    borrow::ToOwned,
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 use url::{Host, Url};
 
 #[cfg_attr(docsrs, doc(cfg(feature = "otpauth")))]
@@ -189,7 +195,7 @@ impl crate::Totp {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Algorithm, TotpError, Totp};
+    use crate::{Algorithm, Totp, TotpError};
 
     #[cfg(feature = "gen_secret")]
     use crate::{Rfc6238, Secret};

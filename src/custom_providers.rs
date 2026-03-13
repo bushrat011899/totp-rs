@@ -1,5 +1,11 @@
 #[cfg(feature = "steam")]
-use crate::{Algorithm, Totp};
+use {
+    crate::{Algorithm, Totp},
+    alloc::vec::Vec,
+};
+
+#[cfg(all(feature = "steam", feature = "otpauth"))]
+use alloc::string::String;
 
 #[cfg(feature = "steam")]
 #[cfg_attr(docsrs, doc(cfg(feature = "steam")))]
