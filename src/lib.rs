@@ -89,7 +89,7 @@ mod migration;
 
 pub use algorithm::Algorithm;
 pub use builder::Builder;
-pub use error::TotpError;
+pub use error::{TotpDetailedError, TotpError};
 pub use secret::{Secret, SecretParseError};
 pub use token::Token;
 
@@ -136,6 +136,10 @@ pub struct Totp {
     /// The "constantoine@github.com" part of "Github:constantoine@github.com". Must not contain a colon `:`
     /// For example, the name of your user's account.
     pub(crate) account_name: alloc::boxed::Box<str>,
+    #[cfg(feature = "otpauth")]
+    #[cfg_attr(feature = "zeroize", zeroize(skip))]
+    #[cfg_attr(feature = "serde", serde(skip))]
+    account_name_validation_error: Option<&'static core::panic::Location<'static>>,
 }
 
 impl core::fmt::Display for Totp {
@@ -274,9 +278,12 @@ impl Totp {
     ///
     /// It will also return an error in case it can't encode the qr into a png.
     /// This shouldn't happen unless either the qrcode library returns malformed data, or the image library doesn't encode the data correctly
-    pub fn to_qr_base64(&self) -> Result<alloc::string::String, TotpError> {
+    #[track_caller]
+    pub fn to_qr_base64(&self) -> Result<alloc::string::String, TotpDetailedError> {
         let url = self.to_url()?;
-        qrcodegen_image::draw_base64(&url).map_err(|url| TotpError::URLTooLong { url })
+        let location = core::panic::Location::caller();
+        qrcodegen_image::draw_base64(&url)
+            .map_err(|url| TotpDetailedError::new_from(TotpError::URLTooLong { url }, location))
     }
 
     /// Will return a qrcode to automatically add a TOTP as a byte array. Needs feature `qr` to be enabled!
@@ -290,9 +297,12 @@ impl Totp {
     ///
     /// It will also return an error in case it can't encode the qr into a png.
     /// This shouldn't happen unless either the qrcode library returns malformed data, or the image library doesn't encode the data correctly
-    pub fn to_qr_png(&self) -> Result<alloc::vec::Vec<u8>, TotpError> {
+    #[track_caller]
+    pub fn to_qr_png(&self) -> Result<alloc::vec::Vec<u8>, TotpDetailedError> {
         let url = self.to_url()?;
-        qrcodegen_image::draw_png(&url).map_err(|url| TotpError::URLTooLong { url })
+        let location = core::panic::Location::caller();
+        qrcodegen_image::draw_png(&url)
+            .map_err(|url| TotpDetailedError::new_from(TotpError::URLTooLong { url }, location))
     }
 }
 
@@ -512,8 +522,9 @@ mod tests {
         assert!(totp.to_url().is_ok());
 
         let qr = totp.to_qr_base64();
-        assert!(matches!(&qr, &Err(TotpError::URLTooLong { .. })));
-        let error_message = format!("{}", qr.unwrap_err());
+        let error = qr.unwrap_err();
+        assert!(matches!(error.kind(), &TotpError::URLTooLong { .. }));
+        let error_message = format!("{}", error.kind());
         assert!(
             error_message.starts_with(
                 "Could not generate a QR code: the generated URL is too long to encode"
@@ -526,7 +537,7 @@ mod tests {
     #[test]
     fn size_test() {
         if cfg!(feature = "otpauth") {
-            assert_eq!(size_of::<Totp>(), 72);
+            assert_eq!(size_of::<Totp>(), 80);
         } else {
             assert_eq!(size_of::<Totp>(), 40);
         }

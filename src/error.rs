@@ -1,7 +1,74 @@
 #[cfg(feature = "otpauth")]
 use {alloc::string::String, url::ParseError};
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
+pub struct TotpDetailedError {
+    kind: TotpError,
+    location: &'static core::panic::Location<'static>,
+}
+
+impl TotpDetailedError {
+    pub const fn kind(&self) -> &TotpError {
+        &self.kind
+    }
+
+    #[track_caller]
+    pub(crate) const fn new(kind: TotpError) -> Self {
+        Self::new_from(kind, core::panic::Location::caller())
+    }
+
+    #[cfg_attr(not(feature = "otpauth"), expect(dead_code))]
+    pub(crate) const fn location(&self) -> &'static core::panic::Location<'static> {
+        self.location
+    }
+
+    pub(crate) const fn new_from(
+        kind: TotpError,
+        location: &'static core::panic::Location<'static>,
+    ) -> Self {
+        Self { kind, location }
+    }
+}
+
+impl core::fmt::Debug for TotpDetailedError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{}\nhelp: this error occurred at {}:{}:{}",
+            self.kind,
+            self.location.file(),
+            self.location.line(),
+            self.location.column()
+        )
+    }
+}
+
+impl core::fmt::Display for TotpDetailedError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        <TotpError as core::fmt::Display>::fmt(&self.kind, f)
+    }
+}
+
+impl core::error::Error for TotpDetailedError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        self.kind.source()
+    }
+}
+
+impl From<TotpError> for TotpDetailedError {
+    #[track_caller]
+    fn from(value: TotpError) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<TotpDetailedError> for TotpError {
+    fn from(value: TotpDetailedError) -> Self {
+        value.kind
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TotpError {
     // === Parameter validation errors ===
@@ -42,6 +109,9 @@ pub enum TotpError {
     /// Account name contains invalid character ':'.
     InvalidAccountName { value: String },
     #[cfg(feature = "otpauth")]
+    /// Account name cannot be empty.
+    EmptyAccountName,
+    #[cfg(feature = "otpauth")]
     /// Account name URL decoding failed.
     AccountNameDecode { value: String },
     #[cfg(feature = "otpauth")]
@@ -58,6 +128,12 @@ pub enum TotpError {
     #[cfg(feature = "qr")]
     /// The generated URL is too long to encode as a QR code.
     URLTooLong { url: String },
+}
+
+impl core::fmt::Debug for TotpError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "TotpError: {self}")
+    }
 }
 
 impl core::fmt::Display for TotpError {
@@ -101,6 +177,10 @@ impl core::fmt::Display for TotpError {
             #[cfg(feature = "otpauth")]
             TotpError::InvalidAccountName { value } => {
                 write!(f, "Account name cannot contain ':', found in \"{}\"", value)
+            }
+            #[cfg(feature = "otpauth")]
+            TotpError::EmptyAccountName => {
+                write!(f, "Account name cannot be empty")
             }
             #[cfg(feature = "otpauth")]
             TotpError::InvalidSecret => {

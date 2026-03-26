@@ -1,4 +1,4 @@
-use crate::{Algorithm, Builder, Secret, Totp, TotpError};
+use crate::{Algorithm, Builder, Secret, Totp, TotpDetailedError, TotpError};
 use alloc::{
     borrow::ToOwned,
     format,
@@ -13,7 +13,7 @@ impl crate::Totp {
     pub fn from_url<S: AsRef<str>>(url: S) -> Result<Totp, TotpError> {
         let builder = Self::parts_from_url(url)?;
 
-        builder.build()
+        Ok(builder.build()?)
     }
 
     /// Generate a TOTP from the standard otpauth URL, using `Totp::new_unchecked` internally
@@ -155,9 +155,13 @@ impl crate::Totp {
     ///
     /// Label and issuer will be URL-encoded if needed be
     /// Secret will be base 32'd without padding, as per RFC.
-    pub fn to_url(&self) -> Result<String, TotpError> {
-        #[cfg(feature = "otpauth")]
-        crate::rfc::assert_account_name_valid(&self.account_name)?;
+    pub fn to_url(&self) -> Result<String, TotpDetailedError> {
+        if let Some(location) = self.account_name_validation_error {
+            return Err(TotpDetailedError::new_from(
+                TotpError::EmptyAccountName,
+                location,
+            ));
+        }
 
         #[allow(unused_mut)]
         let mut host = "totp";

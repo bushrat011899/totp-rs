@@ -1,4 +1,4 @@
-use crate::{Algorithm, Secret, Totp, TotpError};
+use crate::{Algorithm, Secret, Totp, TotpDetailedError, TotpError};
 
 /// Builder used to build a [Totp] with sane defaults.
 /// Because it contains the sensitive data of the HMAC secret, treat it accordingly.
@@ -9,13 +9,21 @@ pub struct Builder {
     pub(crate) algorithm: Algorithm,
     digits: u32,
     secret: Option<Secret>,
+    #[cfg_attr(feature = "zeroize", zeroize(skip))]
+    secret_validation_error: Option<TotpDetailedError>,
     skew: u16,
     step_duration: u64,
 
     #[cfg(feature = "otpauth")]
-    account_name: alloc::boxed::Box<str>,
+    account_name: Option<alloc::boxed::Box<str>>,
+    #[cfg(feature = "otpauth")]
+    #[cfg_attr(feature = "zeroize", zeroize(skip))]
+    account_name_validation_error: Option<TotpDetailedError>,
     #[cfg(feature = "otpauth")]
     issuer: Option<alloc::boxed::Box<str>>,
+    #[cfg(feature = "otpauth")]
+    #[cfg_attr(feature = "zeroize", zeroize(skip))]
+    issuer_validation_error: Option<TotpDetailedError>,
 }
 
 impl Default for Builder {
@@ -29,19 +37,31 @@ impl Builder {
     /// If `gen_secret` is enabled, [Self::new] will generate a new, safe-to-use, secret.
     /// in case `gen_secret` is enabled, [Totp::default] will be equivalent to calling [Self::new] followed by [Self::build] in which case
     /// After build, use [Totp::secret] to retrieve the newly generated secret.
+    #[track_caller]
     pub fn new() -> Self {
         let mut secret = crate::secret::generate_random_bytes().map(Secret::from);
+
+        let secret_validation_error = secret
+            .is_none()
+            .then_some(TotpDetailedError::new(TotpError::SecretNotSet));
 
         Builder {
             algorithm: Algorithm::SHA1,
             digits: 6,
             secret: core::mem::take(&mut secret),
+            secret_validation_error,
             skew: 1,
             step_duration: 30,
             #[cfg(feature = "otpauth")]
-            account_name: "".into(),
+            account_name: None,
+            #[cfg(feature = "otpauth")]
+            account_name_validation_error: Some(TotpDetailedError::new(
+                TotpError::EmptyAccountName,
+            )),
             #[cfg(feature = "otpauth")]
             issuer: None,
+            #[cfg(feature = "otpauth")]
+            issuer_validation_error: None,
         }
     }
 
@@ -68,7 +88,15 @@ impl Builder {
     /// Unless called, and if feature `gen_secret` is enabled, a random 160bits secret from a strong source will be the default value.
     ///
     /// If feature `gen_secret` is not enabled, then not calling this method will result in [Self::build] to fail.
+    #[track_caller]
     pub fn with_secret(mut self, secret: impl Into<Secret>) -> Self {
+        let secret = secret.into();
+
+        self.secret_validation_error = match crate::rfc::assert_secret_length(secret.as_ref()) {
+            Ok(()) => None,
+            Err(error) => Some(TotpDetailedError::new(error)),
+        };
+
         self.secret = Some(secret.into());
 
         self
@@ -77,8 +105,10 @@ impl Builder {
     /// Removes the current [`Secret`], if any has been set.
     ///
     /// If [Self::with_secret] isn't called after this, [Self::build] will fail.
+    #[track_caller]
     pub fn without_secret(mut self) -> Self {
         self.secret = None;
+        self.secret_validation_error = Some(TotpDetailedError::new(TotpError::SecretNotSet));
 
         self
     }
@@ -107,8 +137,17 @@ impl Builder {
     /// Not calling this method will result in [Self::build] to fail.
     #[cfg(feature = "otpauth")]
     #[cfg_attr(docsrs, doc(cfg(feature = "otpauth")))]
+    #[track_caller]
     pub fn with_account_name(mut self, account_name: impl Into<alloc::boxed::Box<str>>) -> Self {
-        self.account_name = account_name.into();
+        let account_name = account_name.into();
+
+        self.account_name_validation_error =
+            match crate::rfc::assert_account_name_valid(&account_name) {
+                Ok(()) => None,
+                Err(error) => Some(TotpDetailedError::new(error)),
+            };
+
+        self.account_name = Some(account_name);
 
         self
     }
@@ -120,8 +159,14 @@ impl Builder {
     /// Unless called, an issuer will not be present.
     #[cfg(feature = "otpauth")]
     #[cfg_attr(docsrs, doc(cfg(feature = "otpauth")))]
+    #[track_caller]
     pub fn with_issuer(mut self, issuer: impl Into<alloc::boxed::Box<str>>) -> Self {
         self.issuer = Some(issuer.into());
+
+        self.issuer_validation_error = match crate::rfc::assert_issuer_valid(&self.issuer) {
+            Ok(()) => None,
+            Err(error) => Some(TotpDetailedError::new(error)),
+        };
 
         self
     }
@@ -133,6 +178,7 @@ impl Builder {
     #[cfg_attr(docsrs, doc(cfg(feature = "otpauth")))]
     pub fn without_issuer(mut self) -> Self {
         self.issuer = None;
+        self.issuer_validation_error = None;
 
         self
     }
@@ -161,8 +207,11 @@ impl Builder {
     /// - If secret was not set using [Self::with_secret] and the feature `gen_secret` is not enabled.
     /// - If `issuer` is not set/is an empty string (`otpauth`` feature).
     /// - If `issuer` or `label` contain the character ':' (`otpauth`` feature).
-    pub fn build(self) -> Result<Totp, TotpError> {
-        let secret = self.secret.as_ref().ok_or(TotpError::SecretNotSet)?;
+    #[track_caller]
+    pub fn build(mut self) -> Result<Totp, TotpDetailedError> {
+        if let Some(error) = core::mem::take(&mut self.secret_validation_error) {
+            Err(error)?;
+        }
 
         match self.algorithm {
             Algorithm::SHA1 | Algorithm::SHA256 | Algorithm::SHA512 => {
@@ -171,25 +220,27 @@ impl Builder {
             #[cfg(feature = "steam")]
             Algorithm::Steam => {
                 if self.digits != 5 {
-                    return Err(TotpError::InvalidDigits {
+                    Err(TotpError::InvalidDigits {
                         digits: self.digits,
-                    });
+                    })?;
                 }
             }
         }
 
         #[cfg(feature = "otpauth")]
         {
-            crate::rfc::assert_issuer_valid(&self.issuer)?;
+            if let Some(error) = core::mem::take(&mut self.issuer_validation_error) {
+                Err(error)?;
+            }
 
             // Allow an empty account name to ensure enabling `otpauth` does not break
             // existing code.
-            if !self.account_name.is_empty() {
-                crate::rfc::assert_account_name_valid(&self.account_name)?;
+            if self.account_name.is_some() {
+                if let Some(error) = core::mem::take(&mut self.account_name_validation_error) {
+                    Err(error)?;
+                }
             }
         }
-
-        crate::rfc::assert_secret_length(secret.as_ref())?;
 
         Ok(self.build_noncompliant())
     }
@@ -224,7 +275,13 @@ impl Builder {
             #[cfg(feature = "otpauth")]
             issuer: core::mem::take(&mut self.issuer),
             #[cfg(feature = "otpauth")]
-            account_name: core::mem::take(&mut self.account_name),
+            account_name: core::mem::take(&mut self.account_name)
+                .unwrap_or_else(alloc::boxed::Box::default),
+            #[cfg(feature = "otpauth")]
+            account_name_validation_error: self
+                .account_name_validation_error
+                .as_ref()
+                .map(TotpDetailedError::location),
         }
     }
 }
@@ -278,7 +335,7 @@ mod tests {
     #[cfg(feature = "otpauth")]
     fn defaults_otpauth_fields() {
         let builder = Builder::new();
-        assert_eq!(&*builder.account_name, "");
+        assert_eq!(builder.account_name.as_deref().as_ref(), None);
         assert!(builder.issuer.is_none());
     }
 
@@ -321,7 +378,10 @@ mod tests {
     #[cfg(feature = "otpauth")]
     fn with_account_name() {
         let builder = Builder::new().with_account_name("user@example.com");
-        assert_eq!(&*builder.account_name, "user@example.com");
+        assert_eq!(
+            builder.account_name.as_deref().as_ref(),
+            Some(&"user@example.com")
+        );
     }
 
     #[test]
@@ -405,7 +465,7 @@ mod tests {
             assert!(result.is_ok());
         } else {
             assert!(result.is_err());
-            assert_eq!(result.unwrap_err(), TotpError::SecretNotSet);
+            assert_eq!(result.unwrap_err().kind(), &TotpError::SecretNotSet);
         }
     }
 
@@ -416,7 +476,7 @@ mod tests {
         let result = builder.build();
         assert!(result.is_err());
         assert!(matches!(
-            result.unwrap_err(),
+            result.unwrap_err().kind(),
             TotpError::SecretTooShort { .. }
         ));
     }
@@ -429,7 +489,10 @@ mod tests {
             .with_digits(5);
         let result = builder.build();
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), TotpError::InvalidDigits { digits: 5 });
+        assert_eq!(
+            result.unwrap_err().kind(),
+            &TotpError::InvalidDigits { digits: 5 }
+        );
     }
 
     #[test]
@@ -440,7 +503,10 @@ mod tests {
             .with_digits(9);
         let result = builder.build();
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), TotpError::InvalidDigits { digits: 9 });
+        assert_eq!(
+            result.unwrap_err().kind(),
+            &TotpError::InvalidDigits { digits: 9 }
+        );
     }
 
     #[test]
@@ -459,8 +525,8 @@ mod tests {
             .build();
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err(),
-            TotpError::InvalidAccountName {
+            result.unwrap_err().kind(),
+            &TotpError::InvalidAccountName {
                 value: "user:name".to_string()
             }
         );
@@ -476,8 +542,8 @@ mod tests {
             .build();
         assert!(result.is_err());
         assert_eq!(
-            result.unwrap_err(),
-            TotpError::InvalidIssuer {
+            result.unwrap_err().kind(),
+            &TotpError::InvalidIssuer {
                 value: "Iss:uer".to_string()
             }
         );
@@ -554,6 +620,9 @@ mod tests {
     fn build_rejects_15_byte_secret() {
         let result = Builder::new().with_secret(vec![0u8; 15]).build();
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), TotpError::SecretTooShort { bits: 120 });
+        assert_eq!(
+            result.unwrap_err().kind(),
+            &TotpError::SecretTooShort { bits: 120 }
+        );
     }
 }

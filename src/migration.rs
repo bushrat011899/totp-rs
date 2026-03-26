@@ -79,7 +79,7 @@ impl Totp {
             None => builder,
         };
 
-        builder.build()
+        Ok(builder.build()?)
     }
 
     #[cfg(all(not(feature = "otpauth"), feature = "alloc"))]
@@ -99,7 +99,7 @@ impl Totp {
             .with_step_duration(step as _)
             .with_secret(secret);
 
-        builder.build()
+        Ok(builder.build()?)
     }
 
     #[cfg(feature = "otpauth")]
@@ -152,7 +152,7 @@ impl Totp {
 
     #[deprecated(since = "6.0.0", note = "use `Builder::build` instead")]
     pub fn from_rfc6238(builder: Builder) -> Result<Totp, TotpError> {
-        builder.build()
+        Ok(builder.build()?)
     }
 
     #[cfg(feature = "steam")]
